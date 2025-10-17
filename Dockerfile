@@ -20,11 +20,16 @@ RUN mkdir -p /opt/anari/ \
     && cmake --install /opt/anari/build
 
 # Build VisRTX
-RUN mkdir -p /opt/VisRTX/ \
-    && git clone https://github.com/NVIDIA/VisRTX.git /opt/VisRTX/src \
-    && cmake -S /opt/VisRTX/src -B /opt/VisRTX/build -G Ninja -DCMAKE_INSTALL_PREFIX=/opt/VisRTX/install \
-    && cmake --build /opt/VisRTX/build \
-    && cmake --install /opt/VisRTX/build
+# RUN mkdir -p /opt/VisRTX/ \
+#     && git clone https://github.com/NVIDIA/VisRTX.git /opt/VisRTX/src \
+#     && cmake \
+#         -S /opt/VisRTX/src \
+#         -B /opt/VisRTX/build \
+#         -G Ninja \
+#         -DCMAKE_INSTALL_PREFIX=/opt/VisRTX/install \
+#         -Danari_DIR:PATH=/opt/anari/install/lib/cmake/anari-0.15.0 \
+#     && cmake --build /opt/VisRTX/build \
+#     && cmake --install /opt/VisRTX/build
 
 RUN mkdir -p /deploy/setup \
     && echo "pan3d[all]" > /deploy/setup/requirements.txt \
@@ -102,7 +107,8 @@ RUN mkdir -p /opt/vtk/src \
         -D VTK_MODULE_ENABLE_VTK_SerializationManager:STRING=YES \
         -D VTK_MODULE_ENABLE_VTK_RenderingAnari:STRING=YES \
         -D VTK_MODULE_ENABLE_VTK_FiltersTexture:STRING=YES \
-        -D anari_DIR=/opt/VisRTX/install/lib/cmake/anari-0.15.0 \
+        -D anari_DIR=/opt/anari/install/lib/cmake/anari-0.15.0 \
+        # -D anari_DIR=/opt/VisRTX/install/lib/cmake/anari-0.15.0 \
         -D Python3_EXECUTABLE=/deploy/server/venv/bin/python \
     && cmake --build /opt/vtk/build \
     && cmake --install /opt/vtk/build
@@ -120,5 +126,7 @@ RUN . /deploy/server/venv/bin/activate \
     && uv pip install /app
 
 # Anari runtime env
-ENV ANARI_LIBRARY=vizrtx
-ENV LD_LIBRARY_PATH=/opt/VisRTX/install/lib/
+ENV ANARI_LIBRARY=helide
+ENV LD_LIBRARY_PATH=/opt/anari/install/lib/
+# ENV ANARI_LIBRARY=vizrtx
+# ENV LD_LIBRARY_PATH=/opt/VisRTX/install/lib/
