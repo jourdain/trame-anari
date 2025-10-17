@@ -22,7 +22,7 @@ RUN mkdir -p /opt/anari/ \
 # Build VisRTX
 RUN mkdir -p /opt/VisRTX/ \
     && git clone https://github.com/NVIDIA/VisRTX.git /opt/VisRTX/src \
-    && cmake -S /opt/anari/src -B /opt/VisRTX/build -G Ninja -DCMAKE_INSTALL_PREFIX=/opt/VisRTX/install \
+    && cmake -S /opt/VisRTX/src -B /opt/VisRTX/build -G Ninja -DCMAKE_INSTALL_PREFIX=/opt/VisRTX/install \
     && cmake --build /opt/VisRTX/build \
     && cmake --install /opt/VisRTX/build
 
