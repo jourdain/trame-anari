@@ -1,3 +1,68 @@
+#############################################
+# Stage 1: VisRTX and ANARI build
+#############################################
+FROM nvidia/cuda:12.2.0-devel-ubuntu22.04 AS visrtxbuilder
+
+ARG ANARI_VERSION=0.14.1
+ARG ANARI_PREFIX=/opt/anari
+ARG VISRTX_PREFIX=/opt/visrtx
+ARG VISRTX_VERSION=0.12.0
+
+# Install dev tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git cmake ninja-build build-essential pkg-config \
+    curl ca-certificates wget unzip xz-utils \
+    python3 python3-pip \
+    libegl1 \
+    libegl1-mesa-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build ANARI
+RUN mkdir -p ${ANARI_PREFIX} \
+    && git clone --branch v${ANARI_VERSION} https://github.com/KhronosGroup/ANARI-SDK.git ${ANARI_PREFIX}/src \
+    && cmake -S ${ANARI_PREFIX}/src/ -B ${ANARI_PREFIX}/build -G Ninja \
+        -DCMAKE_INSTALL_PREFIX=${ANARI_PREFIX}/install \
+        -DBUILD_VIEWER:BOOL=OFF \
+        -DBUILD_TESTING:BOOL=OFF \
+        -DBUILD_REMOTE_DEVICE:BOOL=OFF \
+    && cmake --build ${ANARI_PREFIX}/build \
+    && cmake --install ${ANARI_PREFIX}/build
+
+# Build VisRTX
+ENV CUDA_HOME=/usr/local/cuda-12.2
+ENV CUDAToolkit_ROOT=${CUDA_HOME}
+ENV PATH=${CUDA_HOME}/bin:${PATH}
+
+# Make CUDA stubs available for the build
+# The real libcuda.so.1 lives on the host driver and gets injected only at runtime via --gpus all. 
+# During build, you should link against the CUDA stub library that ships with the toolkit.
+ARG LIBCUDA_STUBS=${CUDA_HOME}/lib64/stubs
+ENV LD_LIBRARY_PATH=${LIBCUDA_STUBS}:${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
+
+RUN ln -s ${CUDA_HOME}/lib64/stubs/libcuda.so ${CUDA_HOME}/lib64/stubs/libcuda.so.1
+RUN ln -s ${CUDA_HOME}/lib64/stubs/libnvidia-ml.so ${CUDA_HOME}/lib64/stubs/libnvidia-ml.so.1
+
+RUN mkdir -p ${VISRTX_PREFIX} \
+    && git clone --branch v${VISRTX_VERSION} https://github.com/NVIDIA/VisRTX.git ${VISRTX_PREFIX}/src \
+    && cmake \
+        -S ${VISRTX_PREFIX}/src \
+        -B ${VISRTX_PREFIX}/build \
+        -G Ninja \
+        -DCMAKE_INSTALL_PREFIX=${VISRTX_PREFIX}/install \
+        -Danari_DIR:PATH=${ANARI_PREFIX}/install/lib/cmake/anari-${ANARI_VERSION} \
+        -DCUDAToolkit_ROOT=${CUDAToolkit_ROOT} \
+        -DCMAKE_CUDA_COMPILER=${CUDA_HOME}/bin/nvcc \
+        -DCMAKE_EXE_LINKER_FLAGS="-L${LIBCUDA_STUBS}" \
+        -DCMAKE_SHARED_LINKER_FLAGS="-L${LIBCUDA_STUBS}" \
+    && cmake --build ${VISRTX_PREFIX}/build \
+    && cmake --install ${VISRTX_PREFIX}/build
+
+RUN sed -i '/\/usr\/local\/cuda-12\.2\/lib64\/stubs/d' /etc/environment || true
+ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
+
+#############################################
+# Stage 2: Pan3D/VTK environment
+#############################################
 FROM kitware/trame:uv-12.2.0-cuda-runtime-ubuntu22.04
 
 # Install dev tools
@@ -12,27 +77,16 @@ RUN apt-get update \
         nvidia-cuda-toolkit-gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Build ANARI
-RUN mkdir -p /opt/anari/ \
-    && git clone https://github.com/KhronosGroup/ANARI-SDK.git /opt/anari/src \
-    && cmake -S /opt/anari/src/ -B /opt/anari/build -G Ninja -DCMAKE_INSTALL_PREFIX=/opt/anari/install \
-    && cmake --build /opt/anari/build \
-    && cmake --install /opt/anari/build
+# Copy VisRTX and ANARI from previous stage
+ARG ANARI_PREFIX=/opt/anari
+ARG VISRTX_PREFIX=/opt/visrtx
 
-# Build VisRTX
-# RUN mkdir -p /opt/VisRTX/ \
-#     && git clone https://github.com/NVIDIA/VisRTX.git /opt/VisRTX/src \
-#     && cmake \
-#         -S /opt/VisRTX/src \
-#         -B /opt/VisRTX/build \
-#         -G Ninja \
-#         -DCMAKE_INSTALL_PREFIX=/opt/VisRTX/install \
-#         -Danari_DIR:PATH=/opt/anari/install/lib/cmake/anari-0.15.0 \
-#     && cmake --build /opt/VisRTX/build \
-#     && cmake --install /opt/VisRTX/build
+COPY --from=visrtxbuilder ${ANARI_PREFIX} ${ANARI_PREFIX}
+COPY --from=visrtxbuilder ${VISRTX_PREFIX} ${VISRTX_PREFIX}
 
+# Setup trame app configuration for pan3d
 RUN mkdir -p /deploy/setup \
-    && echo "pan3d[all]" > /deploy/setup/requirements.txt \
+    && echo "pan3d[all]>=1.2" > /deploy/setup/requirements.txt \
     && echo "trame:" > /deploy/setup/apps.yml \
     && echo "  www_modules:" >> /deploy/setup/apps.yml \
     && echo "  - pan3d.ui.css.base" >> /deploy/setup/apps.yml \
@@ -107,26 +161,21 @@ RUN mkdir -p /opt/vtk/src \
         -D VTK_MODULE_ENABLE_VTK_SerializationManager:STRING=YES \
         -D VTK_MODULE_ENABLE_VTK_RenderingAnari:STRING=YES \
         -D VTK_MODULE_ENABLE_VTK_FiltersTexture:STRING=YES \
-        -D anari_DIR=/opt/anari/install/lib/cmake/anari-0.15.0 \
-        # -D anari_DIR=/opt/VisRTX/install/lib/cmake/anari-0.15.0 \
+        -D anari_DIR:PATH=/opt/anari/install/lib/cmake/anari-0.14.1 \
         -D Python3_EXECUTABLE=/deploy/server/venv/bin/python \
     && cmake --build /opt/vtk/build \
     && cmake --install /opt/vtk/build
 
-# Patched version of pan3d - to test
-COPY --chown=trame-user:trame-user app /app
-
-# Update venv (vtk+pan3d)
+# Update venv - install custom vtk build
 RUN . /deploy/server/venv/bin/activate \
     && uv pip uninstall vtk \
     && uv pip install setuptools \
     && cd /opt/vtk/build \
     && python setup.py bdist_wheel \
-    && uv pip install /opt/vtk/build/dist/vtk-*.whl \
-    && uv pip install /app
+    && uv pip install /opt/vtk/build/dist/vtk-*.whl 
 
 # Anari runtime env
-ENV ANARI_LIBRARY=helide
-ENV LD_LIBRARY_PATH=/opt/anari/install/lib/
-# ENV ANARI_LIBRARY=vizrtx
-# ENV LD_LIBRARY_PATH=/opt/VisRTX/install/lib/
+# ENV ANARI_LIBRARY=helide
+# ENV ANARI_LIBRARY=visgl
+ENV ANARI_LIBRARY=visrtx
+ENV LD_LIBRARY_PATH=${VISRTX_PREFIX}/install/lib/:${ANARI_PREFIX}/install/lib/:$LD_LIBRARY_PATH

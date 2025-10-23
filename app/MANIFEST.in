@@ -1,4 +1,0 @@
-prune pan3d-js
-prune tests
-prune examples
-prune docker

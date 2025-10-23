@@ -9,7 +9,8 @@ docker build --progress=plain -t pan3d-anari .
 ## Run trame application
 
 ```
-docker run --gpus all -p 12345:80 -it pan3d-anari 
+# ANARI_LIBRARY can be "helide", "visgl", "visrtx"
+docker run --gpus all -e ANARI_LIBRARY=helide -p 12345:80 -it pan3d-anari 
 ```
 
 ## Debug cmds
